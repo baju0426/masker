@@ -1,5 +1,5 @@
 /*
- * 문서 개인정보 자동 가명처리 + MD 변환기  v1.1
+ * 문서 개인정보 자동 가명처리 + MD 변환기  v1.2
  *
  * 넣는 파일: md, txt, hwp, hwpx, pdf, docx, xlsx
  *   (md·txt 외에는 kordoc으로 md 변환 후 처리)
@@ -89,7 +89,10 @@ const STOPWORDS = new Set(
     '사건을 정당한 정상적 이상이 이상은 이하는 한편으 전반적 ' +
     '전체적 전반에 고의로 고의성 주말에 주간에 야간에 당직을 ' +
     '당직자 비번자 이하같 이하동 위와같 같은날 동일한 동일인 ' +
-    '본인의 본인은 본인이 본인을 성명불 미상의 미상인 '
+    '본인의 본인은 본인이 본인을 성명불 미상의 미상인 나머지 ' +
+    '나머진 기존의 이외의 이전의 이후의 이상한 전원은 전원의 ' +
+    '정도는 정상인 주변의 주요한 차후에 최근에 최초의 최종의 ' +
+    '최대한 우선은 반대로 반면에 공식적 상기의 '
   )
     .trim()
     .split(/\s+/),
@@ -110,6 +113,8 @@ const HEADER_WORDS = new Set(
 const RISKY_LAST = new Set('을를의에와과로도는이가으'.split(''));
 // 기관·부서 이름의 끝 글자
 const BAD_LAST = new Set('대실단팀청부국'.split(''));
+// 꾸미는 말의 끝 글자 (제출한, 서명된, 근무하던, 제출할 등)
+const VERB_END = new Set('한된던할될'.split(''));
 
 // 표에서 라벨 -> 값 종류
 function lab(flags, ...alts) {
@@ -307,7 +312,7 @@ const RE = {
   nameHon: rx(
     'g',
     String.raw`(?<![${H}])(${NAME3})`,
-    String.raw`\s?(?:씨|님)(?![${H}])`,
+    String.raw`\s?(?:씨|님)${END}`,
   ),
   // 이름(52세) / 이름(남, 52세) / 이름(740305-...)
   nameAge: rx(
@@ -485,11 +490,25 @@ function validName(n, exclude, strong) {
   return true;
 }
 
+// 이름처럼 쓰인 흔적: 뒤에 조사나 씨·님, 괄호가 바로 붙는가
+function usedAsName(text, n) {
+  return rx(
+    '',
+    esc(n),
+    String.raw`(?:\s?(?:씨|님)|\(|(?:은|는|이|가|을|를|의|에게`,
+    String.raw`|께서|과|와|도|만)(?![가-힣]))`,
+  ).test(text);
+}
+
 function collectNames(text, exclude, forced) {
   const found = new Map(); // name -> first index
   const add = (n, idx, strong) => {
-    if (validName(n, exclude, strong) && !found.has(n))
-      found.set(n, idx);
+    if (!validName(n, exclude, strong)) return;
+    // "제출한 직원"처럼 꾸미는 말은 이름으로 쓰인 흔적이 있을 때만
+    if (!strong && n.length === 3 && VERB_END.has(n[2]))
+      if (!usedAsName(text, n)) return;
+    // 가장 먼저 나온 위치를 기억 (먼저 나온 사람이 갑)
+    if (!found.has(n) || idx < found.get(n)) found.set(n, idx);
   };
   for (const [re, strong] of [
     [RE.label, true],
