@@ -1,0 +1,11 @@
+{
+  "name": "masker",
+  "version": "1.1.0",
+  "description": "문서 속 개인정보(이름·연락처·주소 등)를 자동으로 가명처리하고 Markdown으로 변환하는 도구",
+  "main": "masker.js",
+  "bin": { "masker": "masker.js" },
+  "scripts": { "test": "node masker.js --test" },
+  "engines": { "node": ">=18" },
+  "keywords": ["개인정보", "가명처리", "비식별", "masking", "pseudonymization", "korean", "hwp", "markdown"],
+  "license": "MIT"
+}

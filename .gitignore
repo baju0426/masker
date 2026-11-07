@@ -1,0 +1,21 @@
+# ---- 개인정보 보호: 실제 문서와 결과물은 절대 올리지 않음 ----
+masked/
+*_masked.md
+*_mapping.csv
+names.txt
+exclude.txt
+
+# 원본 문서 형식 (실수로 올리는 것 방지)
+*.hwp
+*.hwpx
+*.hwpml
+*.pdf
+*.docx
+*.xlsx
+*.xls
+*.csv
+
+# 기타
+node_modules/
+.DS_Store
+Thumbs.db
