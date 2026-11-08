@@ -1,11 +1,13 @@
 /*
- * 문서 개인정보 자동 가명처리 + MD 변환기  v1.2
+ * 문서 개인정보 자동 가명처리 + MD·PDF 변환기  v1.6.2
  *
  * 넣는 파일: md, txt, hwp, hwpx, pdf, docx, xlsx
  *   (md·txt 외에는 kordoc으로 md 변환 후 처리)
  * 나오는 파일:
  *   <이름>_masked.md   가려진 문서
+ *   <이름>_masked.pdf  가려진 부분을 노란색으로 표시한 PDF
  *   <이름>_mapping.csv 원문-가명 대조표(따로 보관)
+ *   case_mapping.csv   --shared 일 때 사건 대조표(이어서 사용)
  * 외부 전송 없음. 이 컴퓨터 안에서만 처리합니다.
  *
  * 사용법: node masker.js <파일 또는 폴더> [옵션]
@@ -13,10 +15,14 @@
  *   --style gap      인물 가명 갑·을·병 (기본)
  *   --style abc      인물 가명 A·B·C
  *   --style partial  성만 남김 (예: 홍OO)
- *   --shared         여러 파일에 같은 가명
+ *   --shared         여러 파일에 같은 가명 (사건 대조표 이어쓰기)
  *   --no-map         대조표 만들지 않음
  *   --keep-age       나이는 그대로 둠
  *   --keep-biz       업체명은 그대로 둠
+ *   --no-pdf         PDF 만들지 않음
+ *   --no-ai          AI 이름 찾기 쓰지 않음 (ai_names.js 참고)
+ *   --no-ai          AI 이름 찾기 쓰지 않음 (ai_names.js 참고)
+ *   --browser "<경로>" PDF 만들 브라우저(Edge·Chrome) 직접 지정
  *   --kordoc "<명령>" kordoc 실행 명령
  *   --test           코드가 제대로 복사됐는지 점검
  *
@@ -29,6 +35,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { spawnSync } = require('child_process');
+const url = require('url');
 
 // ===== 1. 사전 =====
 const SURNAMES_2 = W('황보 남궁 제갈 선우 독고 사공 서문 ');
@@ -57,7 +64,12 @@ const ROLES = W(
     '고소인 피고발인 고발인 관계인 소유자 점유자 관리자 대표이사 ' +
     '대표자 대표 업주 행위자 위반자 운전자 작성자 담당자 확인자 ' +
     '입회인 동승자 목격자 상대방 배우자 신청인 청구인 근로자 학생 ' +
-    '환자 보호자 고객 회원 ',
+    '환자 보호자 고객 회원 진술자 제보자 제보인 조사자 ' +
+    '피조사자 조사대상자 감찰대상자 징계대상자 피감찰자 면담자 ' +
+    '피면담자 응답자 답변자 질문자 입회자 동석자 탑승자 구조자 ' +
+    '요구조자 이송자 의뢰인 의뢰자 신청자 청구자 수령자 방문자 ' +
+    '서명자 날인자 제출자 기안자 결재자 감독자 책임자 공모자 ' +
+    '가담자 관련자 해당자 출석자 참석자 ',
 );
 const LABELS = ['성\\s?명', '이\\s?름', '성\\s?함'];
 const PARTICLES = W(
@@ -68,6 +80,35 @@ const PARTICLES = W(
 // 이름처럼 보이지만 이름이 아닌 낱말
 const STOPWORDS = new Set(
   (
+    '하지만 하물며 하여튼 하필이면 하나같이 하마터면 한편으로 한동안 ' +
+    '한번은 한꺼번에 한참을 한때는 심지어 반드시 반면에 반대로 ' +
+    '오히려 오로지 오직은 여전히 여태껏 나중에 나머지 나름대로 ' +
+    '이어서 이러한 이처럼 이제는 이렇게 이러면 이로써 이미는 ' +
+    '이를테면 이른바 이외에 이와같이 이로인해 도대체 도저히 도리어 ' +
+    '도무지 정작은 정말로 정확히 정녕코 제대로 제각기 차라리 ' +
+    '차츰차츰 명백히 모두가 모두는 서로가 서로는 설령은 설마하니 ' +
+    '천천히 함부로 황급히 우선은 우선적 원래는 원칙적 진짜로 ' +
+    '진정으로 조금씩 조차도 마침내 마저도 마치는 마땅히 고작은 ' +
+    '공연히 곧바로 금방은 방금은 별도로 비로소 전혀도 전부터 주로는 ' +
+    '지금은 지금도 지금까지 당연히 대체로 대략은 즉시는 결국은 ' +
+    '사실은 사실상 상당히 소위는 손쉽게 신속히 안타깝게 엄격히 ' +
+    '연달아 연이어 예컨대 오래전 오랫동안 온전히 왕왕은 우연히 ' +
+    '유일하게 은밀히 임의로 장차는 전적으로 절대로 점차로 정식으로 ' +
+    '정상적 조속히 조용히 즉각적 진작에 차례로 최대한 최소한 추후에 ' +
+    '충분히 편의상 표면상 현재는 현실적 홀로는 확실히 김에는 강제로 ' +
+    '강력히 고의로 고의적 공식적 구체적 구두로 권고로 기존에 남몰래 ' +
+    '노골적 단순히 대신에 동시에 두루두루 마구잡이 무조건 문서로 ' +
+    '방금전 백방으로 변함없이 사전에 사후에 상세히 서둘러 선제적 ' +
+    '성실히 소극적 송구하게 수시로 순차적 신중히 실제로 실질적 ' +
+    '안전히 양측이 어쨌든 엄중히 여러번 연속적 열심히 예전에 오전에 ' +
+    '오후에 완전히 우선적 원활히 위와같이 유사시 육안으로 인위적 ' +
+    '일단은 임시로 자세히 적극적 전격적 정기적 정당히 정성껏 정중히 ' +
+    '제때에 조만간 종전에 주기적 지속적 직접적 진지하게 차분히 ' +
+    '최근에 추가로 충실히 통상적 특별히 편하게 평소에 표준적 ' +
+    '하루종일 한결같이 함께하여 합법적 현장에서 현저히 형식적 혹시나 ' +
+    '확연히 황당히 효과적 ' +
+    '진급자 승진자 퇴직자 임용자 전입자 전출자 신규자 해당자 ' +
+    '응시자 지원자 근무자 부상자 사망자 참석자 출석자 관계자 ' +
     '소방서 경찰서 세무서 구조대 구급대 진압대 지역대 상황실 ' +
     '조사관 감사관 감찰관 수사관 대표자 이상의 이하의 이후에 ' +
     '이전에 이번에 이내에 정도의 정리를 조사를 조치를 전체를 ' +
@@ -110,11 +151,38 @@ const HEADER_WORDS = new Set(
     .split(/\s+/),
 );
 // 3글자 후보의 끝 글자가 조사일 가능성
-const RISKY_LAST = new Set('을를의에와과로도는이가으'.split(''));
+const RISKY_LAST = new Set('을를의에와과로도는이가으히'.split(''));
 // 기관·부서 이름의 끝 글자
 const BAD_LAST = new Set('대실단팀청부국'.split(''));
-// 꾸미는 말의 끝 글자 (제출한, 서명된, 근무하던, 제출할 등)
-const VERB_END = new Set('한된던할될'.split(''));
+// 말끝(어미)처럼 보이는 끝 글자: 제출한, 서명된, 지나면, 이동시 등
+// 이렇게 끝나는 3글자는 이름으로 쓰인 흔적이 있을 때만 이름으로 봄
+const VERB_END = new Set('한된던할될면며시고니게려'.split(''));
+// 'OO한·OO시'처럼 말끝이 붙는 흔한 낱말의 앞 두 글자
+// ("지시한 과장", "이동시 팀장"은 이름이 아님)
+const VERB_STEMS = new Set(
+  W(
+    '이동 이송 이첩 이행 이용 이관 이전 이해 이상 이탈 도착 도주 ' +
+      '도입 조사 조치 조정 조회 조작 조성 조달 신고 신청 신설 ' +
+      '구조 구매 구입 구성 구급 구축 정비 정리 정정 정지 정착 ' +
+      '진압 진술 진행 진입 진단 진급 방문 방치 방해 방지 방송 ' +
+      '연락 연기 연장 연결 하차 하달 지시 지원 지정 지급 지연 ' +
+      '지적 지휘 지도 지출 제출 제공 제기 제외 제시 제보 제재 ' +
+      '서명 서약 인정 인계 인수 인지 인솔 주관 주장 주의 주차 ' +
+      '전달 전송 전환 전입 전출 전결 전파 고지 고발 고소 고려 ' +
+      '고용 공개 공지 공유 권고 기록 기안 기재 기소 기피 남용 ' +
+      '노출 누락 배정 배치 배부 반납 반려 반영 사용 사망 사과 ' +
+      '사직 선정 선발 설치 설명 소집 소환 송부 송치 시행 시정 ' +
+      '시작 안내 양도 예방 예약 예정 오인 우려 위반 위임 위탁 ' +
+      '유출 유지 유도 은폐 임명 임용 차단 채용 추진 추가 추천 ' +
+      '편성 표시 허가 확인 보고 출동 도움 근무 발생 점검 감독',
+  ),
+);
+// 소방 계급: 바로 뒤에 오는 말은 이름으로 봄 (소방장 홍길동)
+// 이름 뒤 직위: 바로 앞에 오는 말은 이름으로 봄 (홍길동 반장)
+const NAME_POS = W(
+  '반장 주임 계장 과장 팀장 센터장 대장 구조대장 구급대장 ' +
+    '실장 서장 본부장 부서장 소장 대원 주무관',
+);
 
 // 표에서 라벨 -> 값 종류
 function lab(flags, ...alts) {
@@ -265,7 +333,13 @@ const ORG_PREFIX_EXCLUDE = new Set(
       '전국 시 도 지방 국가 같은 동일 해당소방 및 또는 그 이 각급 ' +
       '산하 예하 재 생 실 녹화 다시 방송 각급 관내 인근의 서울 ' +
       '부산 대구 인천 광주 대전 울산 세종 경기 강원 충북 충남 ' +
-      '전북 전남 경북 경남 제주 ',
+      '전북 전남 경북 경남 제주 ' +
+      // 성별·직책·경력 등 꾸미는 말 (선임구급대원, 여자구조대원 등)
+      '선임 후임 여자 남자 여성 남성 남녀 신규 신임 신입 초임 ' +
+      '수석 일반 전담 담당 현장 특수 응급 화재 정규 임시 보조 ' +
+      '예비 의무 행정 지원 전문 우수 모범 기존 전체 일부 소방 ' +
+      '의용 민간 상근 야간 주간 당번 비번 교대 숙련 견습 실습 ' +
+      '파견 전입 전출 퇴직 현직 신참 고참 막내 ',
   ),
 );
 
@@ -292,6 +366,12 @@ const NAME3 =
 const NAME_ANY = `(?:${SURNAMES_2.join('|')})[${H}]{1,2}|[${H}]{2,4}`;
 const END = `(?=(?:${alt(PARTICLES)}){0,2}(?![${H}]))`;
 const TITLES = alt([...RANKS, ...POSITIONS, ...ROLES]);
+const FIRE_RANKS = alt(RANKS.filter(r => r.startsWith('소방')));
+// 이름 바로 뒤에 붙는 말 (조사 + 입니다·부터·까지·께 등)
+const TAIL =
+  String.raw`(?=(?:${alt(PARTICLES)}){0,2}(?![${H}])` +
+  String.raw`|입니|이었|였|이라|라는|이랑|랑|부터|까지|처럼|하고|` +
+  String.raw`보다|께|에서|등|외|및|로부터|으로부터|이시|이세)`;
 
 const RE = {
   // 직급/직위/역할 + 이름 : "소방위 홍길동", "피의자 홍길동은"
@@ -299,7 +379,20 @@ const RE = {
     'g',
     String.raw`(?:지방)?(?:${TITLES})`,
     String.raw`(?:\s+|\s*[:：]\s*)`,
-    String.raw`(?<![${H}])(${NAME3})${END}`,
+    String.raw`(?<![${H}])(${NAME3})${TAIL}`,
+  ),
+  // 소방 계급 + 이름 : "소방장 홍길동입니다", "소방장홍길동"
+  rankName: rx(
+    'g',
+    String.raw`(?:지방)?(?:${FIRE_RANKS})(?!시보)`,
+    String.raw`\s*[:：]?\s*(${NAME3})${TAIL}`,
+  ),
+  // 이름 + 직위 : "홍길동 반장", "홍길동 과장이"
+  namePos: rx(
+    'g',
+    String.raw`(?<![${H}])(${NAME3})`,
+    String.raw`(?:\s*\(\s*|\s+)(?:지방)?`,
+    String.raw`(?:${FIRE_RANKS}|${alt(NAME_POS)})`,
   ),
   // 이름 + 직급 : "홍길동 소방위", "홍길동(소방위)"
   nameTitle: rx(
@@ -389,9 +482,23 @@ const RE = {
 };
 
 // ===== 3. 사건(컨텍스트) =====
+// 가린 자리 표시(PDF에서 노란색으로 칠할 곳). md에는 남기지 않음
+const MK_OPEN = String.fromCharCode(0xe000);
+const MK_CLOSE = String.fromCharCode(0xe001);
+const unmark = s => s.split(MK_OPEN).join('').split(MK_CLOSE).join('');
+function mk(ctx, s) {
+  return ctx.mark ? MK_OPEN + s + MK_CLOSE : s;
+}
+// 앞뒤 빈칸은 두고 내용만 표시
+function mkTrim(ctx, s) {
+  const m = s.match(/^(\s*)([\s\S]*?)(\s*)$/);
+  return m[2] ? m[1] + mk(ctx, m[2]) + m[3] : s;
+}
+
 function newContext(style) {
   return {
     style,
+    mark: false,
     persons: new Map(), // 실명 -> 가명
     orgs: new Map(), // 기관명 -> 가명
     orgCount: {},
@@ -412,10 +519,13 @@ function personCode(ctx, name) {
     code = sur + '○'.repeat(name.length - sur.length);
   } else {
     const list = PERSON_CODES[ctx.style] || PERSON_CODES.gap;
-    const i = ctx.persons.size;
-    code =
+    const used = new Set(ctx.persons.values());
+    const nth = i =>
       list[i % list.length] +
       (i >= list.length ? String(Math.floor(i / list.length) + 1) : '');
+    let i = ctx.persons.size;
+    while (used.has(nth(i))) i++; // 대조표에 이미 쓴 가명은 건너뜀
+    code = nth(i);
   }
   ctx.persons.set(name, code);
   return code;
@@ -449,9 +559,10 @@ const PAIRS = {
   으로: ['로', '으로', '로'],
   로: ['로', '으로', '로'],
 };
-function replaceWithParticle(text, from, to) {
+function replaceWithParticle(text, from, to, ctx) {
   let n = 0;
   const b = batchim(to);
+  const shown = ctx ? mk(ctx, to) : to;
   const re = rx(
     'g',
     esc(from),
@@ -462,7 +573,7 @@ function replaceWithParticle(text, from, to) {
   const out = text.replace(re, (m, paren, p) => {
     n++;
     const fixed = p && b >= 0 ? PAIRS[p][b] : p || '';
-    return to + (paren || '') + fixed;
+    return shown + (paren || '') + fixed;
   });
   return [out, n];
 }
@@ -480,8 +591,14 @@ function validName(n, exclude, strong) {
     return false;
   if (RANKS.includes(n) || POSITIONS.includes(n) || ROLES.includes(n))
     return false;
-  if (BAD_LAST.has(n[n.length - 1]) && !strong) return false;
-  if (!strong && n.length === 3 && RISKY_LAST.has(n[2])) return false;
+  if (
+    BAD_LAST.has(n[n.length - 1]) &&
+    strong !== true &&
+    strong !== 'rank'
+  )
+    return false;
+  if (strong !== true && n.length === 3 && RISKY_LAST.has(n[2]))
+    return false;
   const NOT_NAME = W(
     '성명 이름 성함 미상 불상 생략 없음 해당없음 ' +
       '본인 기타 비고 합계 계',
@@ -490,23 +607,36 @@ function validName(n, exclude, strong) {
   return true;
 }
 
-// 이름처럼 쓰인 흔적: 뒤에 조사나 씨·님, 괄호가 바로 붙는가
+// 이름처럼 쓰인 흔적이 문서 안에 있는가 (문맥 확인)
+// - 뒤에 조사·씨·님·괄호가 바로 붙음: 홍길동은, 홍길동 씨, 홍길동(52세)
+// - 직급 뒤 명단처럼 나열됨: 소방장 홍길동, / 소방장 홍길동. / 줄 끝
 function usedAsName(text, n) {
-  return rx(
+  // 사람 뒤에 붙는 조사 (두 개까지 이어 붙어도 됨: 에게도, 에게는)
+  const P = '은|는|이|가|을|를|의|에게서|에게|께서|한테|과|와|도|만';
+  const attached = rx(
     '',
     esc(n),
-    String.raw`(?:\s?(?:씨|님)|\(|(?:은|는|이|가|을|를|의|에게`,
-    String.raw`|께서|과|와|도|만)(?![가-힣]))`,
-  ).test(text);
+    String.raw`(?:\s?(?:씨|님)|\(|(?:${P}){1,2}(?![가-힣]))`,
+  );
+  const listed = rx(
+    'm',
+    String.raw`(?:${TITLES})\s*[:：]?\s*`,
+    esc(n),
+    String.raw`(?=\s*(?:[,.·/;)\]]|$))`,
+  );
+  return attached.test(text) || listed.test(text);
 }
 
 function collectNames(text, exclude, forced) {
   const found = new Map(); // name -> first index
   const add = (n, idx, strong) => {
     if (!validName(n, exclude, strong)) return;
-    // "제출한 직원"처럼 꾸미는 말은 이름으로 쓰인 흔적이 있을 때만
-    if (!strong && n.length === 3 && VERB_END.has(n[2]))
-      if (!usedAsName(text, n)) return;
+    // 말끝처럼 끝나면 문맥 확인: 이름으로 쓰인 흔적이 있어야 함
+    // ("차량 이동시 팀장", "기간이 지나면 담당자" 등을 거름)
+    const verbish = n.length === 3 && VERB_END.has(n[2]);
+    if (verbish && strong !== 'rank' && VERB_STEMS.has(n.slice(0, 2)))
+      return; // 지시한, 이동시 ...
+    if (verbish && !strong && !usedAsName(text, n)) return;
     // 가장 먼저 나온 위치를 기억 (먼저 나온 사람이 갑)
     if (!found.has(n) || idx < found.get(n)) found.set(n, idx);
   };
@@ -514,12 +644,18 @@ function collectNames(text, exclude, forced) {
     [RE.label, true],
     [RE.nameAge, true],
     [RE.nameHon, false],
+    [RE.rankName, 'rank'],
+    [RE.namePos, 'pos'],
     [RE.titleName, false],
     [RE.nameTitle, false],
   ]) {
     re.lastIndex = 0;
     let m;
-    while ((m = re.exec(text))) add(m[1], m.index, strong);
+    // 한 글자씩 겹쳐 가며 찾음 ("소방위 진술자 홍길동"도 잡도록)
+    while ((m = re.exec(text))) {
+      add(m[1], m.index, strong);
+      re.lastIndex = m.index + 1;
+    }
   }
   for (const n of forced) {
     const i = text.indexOf(n);
@@ -566,7 +702,7 @@ function maskCell(type, raw, ctx, names, exclude) {
         ctx.addrs.set(val, '[주소]');
         bump(ctx, '주소');
       }
-      return '[주소]';
+      return mk(ctx, '[주소]');
     }
     case 'id':
     case 'phone':
@@ -579,16 +715,16 @@ function maskCell(type, raw, ctx, names, exclude) {
             ? '전화번호'
             : '계좌번호',
       );
-      return raw.replace(/\d/g, '*');
+      return mkTrim(ctx, raw.replace(/\d/g, '*'));
     case 'email':
       bump(ctx, '이메일');
-      return '[이메일]';
+      return mk(ctx, '[이메일]');
     case 'biz': {
       if (ctx.noBiz) return raw;
       if (!ctx.biz.has(val))
         ctx.biz.set(val, `[업체${letter(ctx.biz.size)}]`);
       bump(ctx, '업체·상호');
-      return ctx.biz.get(val);
+      return mk(ctx, ctx.biz.get(val));
     }
     default:
       return raw; // org 는 본문 규칙으로 처리
@@ -694,43 +830,50 @@ function maskText(text, ctx, opt) {
       return fn(...a);
     });
   };
-  sub(RE.rrn, '주민번호·생년월일 등', () => '******-*******');
-  sub(RE.mobile, '전화번호', () => '010-****-****');
-  sub(RE.landline, '전화번호', m => m.replace(/\d/g, '*'));
-  sub(RE.email, '이메일', () => '[이메일]');
+  const M = s => mk(ctx, s);
+  sub(RE.rrn, '주민번호·생년월일 등', () => M('******-*******'));
+  sub(RE.mobile, '전화번호', () => M('010-****-****'));
+  sub(RE.landline, '전화번호', m => M(m.replace(/\d/g, '*')));
+  sub(RE.email, '이메일', () => M('[이메일]'));
   sub(
     RE.birth,
     '주민번호·생년월일 등',
-    (m, a, b) => a + b.replace(/\d/g, '*'),
+    (m, a, b) => a + M(b.replace(/\d/g, '*')),
   );
-  sub(RE.acctCtx, '계좌번호', (m, a, b) => a + b.replace(/\d/g, '*'));
+  sub(
+    RE.acctCtx,
+    '계좌번호',
+    (m, a, b) => a + M(b.replace(/\d/g, '*')),
+  );
   text = text.replace(RE.acctGeneric, m =>
     m.replace(/\D/g, '').length >= 10
-      ? (bump(ctx, '계좌번호'), m.replace(/\d/g, '*'))
+      ? (bump(ctx, '계좌번호'), M(m.replace(/\d/g, '*')))
       : m,
   );
-  sub(RE.car, '차량번호', () => '**○ ****');
-  sub(RE.addrLine, '주소', (m, a) => a + '[주소]');
+  sub(RE.car, '차량번호', () => M('**○ ****'));
+  sub(RE.addrLine, '주소', (m, a) => a + M('[주소]'));
   for (const [s, r] of [...ctx.addrs].sort(
     (a, b) => b[0].length - a[0].length,
   )) {
-    if (s.length >= 6) text = text.split(s).join(r);
+    if (s.length >= 6) text = text.split(s).join(M(r));
   }
-  sub(RE.aptUnit, '주소', () => '○○동 ○○호');
+  sub(RE.aptUnit, '주소', () => M('○○동 ○○호'));
   sub(RE.road, '주소', m =>
-    m
-      .replace(/^[가-힣A-Za-z0-9]+?(대로|로|길)/, '○○$1')
-      .replace(/\d+/g, '○'),
+    M(
+      m
+        .replace(/^[가-힣A-Za-z0-9]+?(대로|로|길)/, '○○$1')
+        .replace(/\d+/g, '○'),
+    ),
   );
-  sub(RE.jibun, '주소', () => '○○동 ○번지');
+  sub(RE.jibun, '주소', () => M('○○동 ○번지'));
   if (!opt.keepAge)
-    sub(RE.age, '나이', (m, man) => (man || '') + '○○세');
+    sub(RE.age, '나이', (m, man) => (man || '') + M('○○세'));
 
   // (4) 업체명(표에서 수집된 것) 전체 치환
   for (const [s, r] of [...ctx.biz].sort(
     (a, b) => b[0].length - a[0].length,
   )) {
-    if (s.length >= 2) [text] = replaceWithParticle(text, s, r);
+    if (s.length >= 2) [text] = replaceWithParticle(text, s, r, ctx);
   }
 
   // (5) 기관(소방서·센터·구조대 등)
@@ -753,7 +896,7 @@ function maskText(text, ctx, opt) {
       ctx.orgs.set(key, tag + suf);
     }
     bump(ctx, '소속기관');
-    return ctx.orgs.get(key);
+    return M(ctx.orgs.get(key));
   });
 
   // (6) 인물: 등장 순서대로 가명 부여 후 전체 치환
@@ -761,11 +904,18 @@ function maskText(text, ctx, opt) {
     .sort((a, b) => a[1] - b[1])
     .map(e => e[0]);
   ordered.forEach(n => personCode(ctx, n));
+  // exclude.txt 에 적은 낱말은 대조표에 있어도 가리지 않음
+  for (const n of exclude) ctx.persons.delete(n);
   const all = [...ctx.persons.keys()]
     .filter(n => text.includes(n))
     .sort((a, b) => b.length - a.length);
   for (const n of all) {
-    const [t2, cnt] = replaceWithParticle(text, n, ctx.persons.get(n));
+    const [t2, cnt] = replaceWithParticle(
+      text,
+      n,
+      ctx.persons.get(n),
+      ctx,
+    );
     if (cnt) {
       bump(ctx, '인물(성명)', cnt);
       text = t2;
@@ -790,7 +940,7 @@ function maskText(text, ctx, opt) {
       );
       text = text.replace(re, (m, sp) => {
         bump(ctx, '인물(성+직급)');
-        return ctx.persons.get(list[0]) + sp;
+        return M(ctx.persons.get(list[0])) + sp;
       });
     }
   }
@@ -883,6 +1033,69 @@ function writeMapping(file, ctx) {
   );
 }
 
+// CSV 한 줄씩 읽기 (따옴표 안의 쉼표·줄바꿈 처리)
+function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) {
+      if (c === '"' && text[i + 1] === '"') {
+        cell += '"';
+        i++;
+      } else if (c === '"') q = false;
+      else cell += c;
+    } else if (c === '"') q = true;
+    else if (c === ',') {
+      row.push(cell);
+      cell = '';
+    } else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = '';
+    } else cell += c;
+  }
+  if (cell || row.length) {
+    row.push(cell);
+    rows.push(row);
+  }
+  return rows;
+}
+
+// 사건 대조표(case_mapping.csv)를 읽어 이어서 쓸 준비
+const CASE_FILE = 'case_mapping.csv';
+function loadCase(file, style) {
+  const ctx = newContext(style);
+  if (!fs.existsSync(file)) return ctx;
+  const text = stripBom(fs.readFileSync(file, 'utf8'));
+  if (text.includes('\ufffd'))
+    throw new Error(
+      `${CASE_FILE} 의 글자 형식이 바뀌었습니다. 엑셀에서 저장했다면 ` +
+        '"CSV UTF-8" 형식으로 다시 저장하세요.',
+    );
+  const suffixes = [...ORG_SUFFIX].sort((a, b) => b.length - a.length);
+  for (const [kind, k, v] of parseCsv(text).slice(1)) {
+    if (!k || !v) continue;
+    if (kind === '인물') ctx.persons.set(k, v);
+    else if (kind === '업체·상호') ctx.biz.set(k, v);
+    else if (kind === '주소') ctx.addrs.set(k, '[주소]');
+    else if (kind === '소속기관') {
+      ctx.orgs.set(k, v);
+      const suf = suffixes.find(x => k.endsWith(x));
+      if (suf) {
+        const t = suf.replace(/^119/, '');
+        ctx.orgCount[t] = (ctx.orgCount[t] || 0) + 1;
+      }
+    }
+  }
+  ctx.loaded = ctx.persons.size + ctx.orgs.size + ctx.biz.size;
+  return ctx;
+}
+
 function gather(inputs) {
   const files = [];
   for (const p of inputs) {
@@ -897,7 +1110,7 @@ function gather(inputs) {
         if (
           fs.statSync(full).isFile() &&
           (TEXT_EXT.has(ext) || CONVERT_EXT.has(ext)) &&
-          !/_masked\.md$/i.test(f)
+          !/_masked\.(md|pdf|html)$/i.test(f)
         )
           files.push(full);
       }
@@ -916,6 +1129,9 @@ function parseArgs(argv) {
     keepBiz: false,
     out: null,
     kordoc: null,
+    pdf: true,
+    ai: true,
+    browser: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -926,6 +1142,9 @@ function parseArgs(argv) {
     else if (a === '--keep-age') o.keepAge = true;
     else if (a === '--keep-biz') o.keepBiz = true;
     else if (a === '--kordoc') o.kordoc = argv[++i];
+    else if (a === '--no-pdf') o.pdf = false;
+    else if (a === '--no-ai') o.ai = false;
+    else if (a === '--browser') o.browser = argv[++i];
     else if (a === '--test') o.test = true;
     else if (a === '-h' || a === '--help') o.help = true;
     else o.inputs.push(a);
@@ -933,7 +1152,275 @@ function parseArgs(argv) {
   return o;
 }
 
-// ===== 8. 자체 점검 (--test) =====
+// ===== 8. AI 이름 찾기 (선택) =====
+// ai_names.js 와 models 폴더가 있으면 문맥으로 이름을 더 찾음
+function loadAiModule(here) {
+  for (const f of ['ai_names.js', 'ai_names.js.txt']) {
+    const p = path.join(here, f);
+    if (fs.existsSync(p)) return require(p);
+  }
+  return null;
+}
+
+// AI가 고른 말에서 조사를 떼고, 이름 모양인지 다시 확인
+const NAME_TAILS = alt([
+  ...PARTICLES,
+  ...W('입니다 입니까 이었다 이었고 이었으며 였다 였고 이고 이며'),
+  ...W('이라고 이라는 라고 라는 이랑 랑 부터 까지 처럼 하고 보다'),
+  ...W('께서 께 에서 등 외 및 로부터 으로부터'),
+]);
+const NAME_SHAPE = new RegExp(
+  `^(?:(?:${SURNAMES_2.join('|')})[${H}]{1,2}` +
+    `|[${SURNAMES_1}][${H}]{1,2})$`,
+);
+function aiNames(found, exclude) {
+  const tail = new RegExp(`(?:${NAME_TAILS})$`);
+  const out = new Set();
+  for (const { text, score } of found) {
+    let n = text.replace(/[^가-힣]/g, '');
+    const max = SURNAMES_2.some(x => n.startsWith(x)) ? 4 : 3;
+    while (n.length > max && tail.test(n)) n = n.replace(tail, '');
+    if (!NAME_SHAPE.test(n)) continue;
+    // 두 글자는 다른 낱말 속에도 흔해 AI만 믿고 가리지 않음
+    if (n.length < 3 || score < 0.6) continue;
+    if (!validName(n, exclude, 'rank')) continue;
+    const verbish = n.length === 3 && VERB_END.has(n[2]);
+    if (verbish && VERB_STEMS.has(n.slice(0, 2))) continue;
+    out.add(n);
+  }
+  return [...out];
+}
+
+// ===== 9. PDF 만들기 =====
+// md -> HTML (표·제목·목록 등). 가린 자리는 노란색으로 칠함
+const escHtml = s =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const marks = s =>
+  s.split(MK_OPEN).join('<mark>').split(MK_CLOSE).join('</mark>');
+
+function inline(s) {
+  let t = escHtml(s).replace(/&lt;br\s*\/?&gt;/gi, '<br>');
+  t = t
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1'); // 링크는 글자만
+  return marks(t);
+}
+
+// 문서 안 HTML 표: 표에 필요한 태그만 남기고 나머지는 지움
+const KEEP_TAGS = new Set(
+  W('table thead tbody tr td th br b strong i em p span sup sub'),
+);
+function cleanHtml(block) {
+  const t = block
+    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, '')
+    .replace(/<\/?([a-zA-Z0-9]+)([^>]*)>/g, (m, tag, attrs) => {
+      tag = tag.toLowerCase();
+      if (!KEEP_TAGS.has(tag)) return '';
+      if (m.startsWith('</')) return `</${tag}>`;
+      const span = [...attrs.matchAll(/(colspan|rowspan)="?(\d+)"?/gi)]
+        .map(x => ` ${x[1].toLowerCase()}="${x[2]}"`)
+        .join('');
+      return `<${tag}${span}>`;
+    });
+  return marks(t);
+}
+
+function mdToHtml(src) {
+  const L = src.replace(/\r\n?/g, '\n').split('\n');
+  const out = [];
+  const isRow = l => /^\s*\|.*\|\s*$/.test(l);
+  const isSep = l => /^[\s|:\-]+$/.test(l) && /-{2,}/.test(l);
+  const cells = l =>
+    l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|');
+  const isList = l => /^\s*([-*+]|\d+[.)])\s+/.test(l);
+  const isBlock = l =>
+    /^\s*$/.test(l) ||
+    /^(#{1,6}\s|```|\s*>|\s*<table)/i.test(l) ||
+    isRow(l) ||
+    isList(l);
+  let i = 0;
+  while (i < L.length) {
+    const l = L[i];
+    if (/^\s*$/.test(l)) {
+      i++;
+    } else if (/^```/.test(l)) {
+      const b = [];
+      for (i++; i < L.length && !/^```/.test(L[i]); i++) b.push(L[i]);
+      i++;
+      out.push(`<pre>${marks(escHtml(b.join('\n')))}</pre>`);
+    } else if (/^\s*<table/i.test(l)) {
+      const b = [];
+      while (i < L.length) {
+        b.push(L[i]);
+        if (/<\/table>/i.test(L[i++])) break;
+      }
+      out.push(cleanHtml(b.join('\n')));
+    } else if (/^#{1,6}\s/.test(l)) {
+      const n = l.match(/^#+/)[0].length;
+      out.push(`<h${n}>${inline(l.replace(/^#+\s*/, ''))}</h${n}>`);
+      i++;
+    } else if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(l)) {
+      out.push('<hr>');
+      i++;
+    } else if (isRow(l)) {
+      const rows = [];
+      let head = null;
+      while (i < L.length && isRow(L[i])) {
+        if (isSep(L[i])) head = head || rows.length;
+        else rows.push(cells(L[i]));
+        i++;
+      }
+      const tr = (r, tag) =>
+        '<tr>' +
+        r.map(c => `<${tag}>${inline(c.trim())}</${tag}>`).join('') +
+        '</tr>';
+      out.push(
+        '<table>' +
+          rows
+            .map((r, k) => tr(r, head && k < head ? 'th' : 'td'))
+            .join('') +
+          '</table>',
+      );
+    } else if (/^\s*>/.test(l)) {
+      const b = [];
+      while (i < L.length && /^\s*>/.test(L[i]))
+        b.push(inline(L[i++].replace(/^\s*>\s?/, '')));
+      out.push(`<blockquote>${b.join('<br>')}</blockquote>`);
+    } else if (isList(l)) {
+      const ordered = /^\s*\d/.test(l);
+      const b = [];
+      while (i < L.length && isList(L[i])) {
+        const depth = Math.floor(L[i].match(/^\s*/)[0].length / 2);
+        const t = L[i++].replace(/^\s*([-*+]|\d+[.)])\s+/, '');
+        b.push(`<li style="margin-left:${depth}em">${inline(t)}</li>`);
+      }
+      const tag = ordered ? 'ol' : 'ul';
+      out.push(`<${tag}>${b.join('')}</${tag}>`);
+    } else {
+      const b = [];
+      while (i < L.length && !isBlock(L[i])) b.push(inline(L[i++]));
+      out.push(`<p>${b.join('<br>')}</p>`);
+    }
+  }
+  return out.join('\n');
+}
+
+function htmlPage(body, title, info) {
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8">
+<title>${escHtml(title)}</title><style>
+@page{size:A4;margin:18mm 16mm 20mm;
+@bottom-center{content:counter(page) " / " counter(pages);
+font-size:9pt;color:#666}}
+body{font-family:'Malgun Gothic','맑은 고딕','Noto Sans KR',
+'Noto Sans CJK KR',sans-serif;font-size:10.5pt;line-height:1.7;
+color:#111;word-break:keep-all;overflow-wrap:anywhere}
+.top{border-bottom:2px solid #333;padding-bottom:6px;margin-bottom:14px}
+.top h1{font-size:15pt;margin:0 0 4px}
+.top div{font-size:9pt;color:#444}
+h1,h2,h3,h4{line-height:1.4;margin:1.2em 0 .5em}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:9.5pt}
+th,td{border:1px solid #999;padding:4px 6px;vertical-align:top}
+th{background:#eee}
+mark{background:#ffe066;padding:0 2px;border-radius:2px}
+pre{white-space:pre-wrap;background:#f5f5f5;padding:8px;font-size:9pt}
+blockquote{border-left:3px solid #bbb;margin:.6em 0;padding-left:10px}
+ul,ol{padding-left:1.4em}
+</style></head><body>
+<div class="top"><h1>${escHtml(title)}</h1><div>${escHtml(info)}</div>
+<div><mark>노란색</mark> 부분이 가려진(가명처리된) 곳입니다.</div></div>
+${body}
+</body></html>`;
+}
+
+// PDF를 만들 브라우저 찾기 (Windows 기본 Edge -> Chrome 순)
+function findBrowser(given) {
+  const env = process.env;
+  const list = [
+    given,
+    env.MASKER_BROWSER,
+    path.join(
+      env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)',
+      'Microsoft\\Edge\\Application\\msedge.exe',
+    ),
+    path.join(
+      env.ProgramFiles || 'C:\\Program Files',
+      'Microsoft\\Edge\\Application\\msedge.exe',
+    ),
+    path.join(
+      env.ProgramFiles || 'C:\\Program Files',
+      'Google\\Chrome\\Application\\chrome.exe',
+    ),
+    env.LOCALAPPDATA &&
+      path.join(
+        env.LOCALAPPDATA,
+        'Google\\Chrome\\Application\\chrome.exe',
+      ),
+    '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/usr/bin/microsoft-edge',
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+  ];
+  return list.find(p => p && fs.existsSync(p)) || null;
+}
+
+// 브라우저를 화면 없이 잠깐 띄워 HTML을 PDF로 인쇄
+function printPdf(browser, htmlFile, pdfFile) {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'mask_pdf_'));
+  try {
+    try {
+      fs.unlinkSync(pdfFile);
+    } catch {
+      /* 없음 */
+    }
+    spawnSync(
+      browser,
+      [
+        '--headless',
+        '--disable-gpu',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-extensions',
+        '--disable-sync',
+        '--disable-background-networking',
+        '--disable-component-update',
+        '--disable-domain-reliability',
+        '--disable-features=Translate,MediaRouter,OptimizationHints',
+        '--no-service-autorun',
+        ...(process.getuid && process.getuid() === 0
+          ? ['--no-sandbox']
+          : []),
+        `--user-data-dir=${profile}`,
+        '--no-pdf-header-footer',
+        '--print-to-pdf-no-header',
+        `--print-to-pdf=${pdfFile}`,
+        url.pathToFileURL(htmlFile).href,
+      ],
+      { stdio: 'ignore', timeout: 60000 },
+    );
+    return fs.existsSync(pdfFile) && fs.statSync(pdfFile).size > 0;
+  } finally {
+    try {
+      fs.rmSync(profile, { recursive: true, force: true });
+    } catch {
+      /* 없음 */
+    }
+  }
+}
+
+// 결과 파일 제목에도 실명이 보이지 않게 대조표로 바꿈
+function maskTitle(title, ctx) {
+  let t = title;
+  const names = [...ctx.persons.keys()].sort(
+    (a, b) => b.length - a.length,
+  );
+  for (const n of names) t = t.split(n).join(ctx.persons.get(n));
+  return t;
+}
+
+// ===== 10. 자체 점검 (--test) =====
 const TEST_IN = [
   '| 성명 | 홍길동 | 연락처 | 010-1234-5678 |',
   '|---|---|---|---|',
@@ -941,6 +1428,7 @@ const TEST_IN = [
   '신고인 김영희 씨는 동부구청 주무관 홍길동(52세)을',
   '신고하였다. 홍 주무관은 차량 12가 3456을 이용하였다.',
   '주민등록번호 740305-1234567, 메일 abc@test.com',
+  '소방장 김민한입니다. 차량 이동시 팀장 윤태한 반장에게 보고.',
 ].join('\n');
 const TEST_OUT = [
   '| 성명 | 을 | 연락처 | ***-****-**** |',
@@ -949,6 +1437,7 @@ const TEST_OUT = [
   '신고인 갑 씨는 A구청 주무관 을(○○세)을',
   '신고하였다. 을 주무관은 차량 **○ ****을 이용하였다.',
   '주민등록번호 ******-*******, 메일 [이메일]',
+  '소방장 병입니다. 차량 이동시 팀장 정 반장에게 보고.',
 ].join('\n');
 function selfTest() {
   const ctx = newContext('gap');
@@ -967,7 +1456,7 @@ function selfTest() {
   process.exitCode = 1;
 }
 
-function main() {
+async function main() {
   const o = parseArgs(process.argv.slice(2));
   if (o.test) return selfTest();
   if (o.help || !o.inputs.length) {
@@ -994,31 +1483,76 @@ function main() {
     console.log('처리할 파일이 없습니다.');
     return;
   }
+  const browser = o.pdf ? findBrowser(o.browser) : null;
+  const keepCase = o.shared && o.map; // 사건 대조표 이어쓰기
 
   const mode = o.shared ? ', 사건 공통 가명' : '';
   console.log(
     `\n개인정보 가명처리 시작 - ${files.length}개 파일` +
       ` (인물 표기: ${o.style}${mode})\n`,
   );
-  let ctx = newContext(o.style);
+  if (o.shared && !o.map)
+    console.log(
+      '  [안내] --no-map 이라 사건 대조표를 저장하지 않습니다.\n',
+    );
+  // AI 이름 찾기: 준비돼 있으면 자동 사용 (--no-ai 로 끔)
+  let ner = null;
+  const aiMod = o.ai ? loadAiModule(here) : null;
+  if (aiMod && fs.existsSync(path.join(here, 'models'))) {
+    try {
+      const r = await aiMod.load(here);
+      if (r.ner) {
+        ner = r.ner;
+        console.log('  [AI] 문맥으로 이름 찾기를 함께 씁니다.\n');
+      } else console.log(`  [AI] 사용 안 함 - ${r.error}\n`);
+    } catch (e) {
+      console.log(`  [AI] 사용 안 함 - ${e.message}\n`);
+    }
+  }
+  const cases = new Map(); // 결과 폴더별 사건 대조표
   let ok = 0;
+  let htmlOnly = 0;
   for (const f of files) {
-    if (!o.shared) ctx = newContext(o.style);
-    ctx.noBiz = o.keepBiz;
     const name = path.basename(f, path.extname(f));
     const outDir = o.out || path.join(path.dirname(f), 'masked');
+    const caseFile = path.join(outDir, CASE_FILE);
     try {
+      let ctx;
+      if (keepCase) {
+        if (!cases.has(outDir)) {
+          const c = loadCase(caseFile, o.style);
+          if (c.loaded)
+            console.log(
+              `  [대조표] 이전 기록 ${c.persons.size}명 이어쓰기`,
+            );
+          cases.set(outDir, c);
+        }
+        ctx = cases.get(outDir);
+      } else if (o.shared) {
+        ctx = cases.get('') || newContext(o.style);
+        cases.set('', ctx);
+      } else ctx = newContext(o.style);
+      ctx.noBiz = o.keepBiz;
+      ctx.mark = true;
+      ctx.counts = {};
       const md = toMarkdown(f, o.kordoc);
-      if (o.shared) ctx.counts = {};
-      const masked = maskText(md, ctx, {
+      let names = forced;
+      let aiList = [];
+      if (ner) {
+        aiList = aiNames(await aiMod.findNames(ner, md), exclude);
+        names = [...new Set([...forced, ...aiList])];
+      }
+      const marked = maskText(md, ctx, {
         exclude,
-        forced,
+        forced: names,
         keepAge: o.keepAge,
       });
+      const masked = unmark(marked);
       fs.mkdirSync(outDir, { recursive: true });
       const outFile = path.join(outDir, `${name}_masked.md`);
       fs.writeFileSync(outFile, masked, 'utf8');
-      if (o.map)
+      if (keepCase) writeMapping(caseFile, ctx);
+      else if (o.map)
         writeMapping(path.join(outDir, `${name}_mapping.csv`), ctx);
       ok++;
       const c =
@@ -1027,7 +1561,35 @@ function main() {
           .join(', ') || '탐지 없음';
       console.log(`  [완료] ${path.basename(f)}`);
       console.log(`     -> ${outFile}`);
+      if (o.pdf) {
+        const title = maskTitle(name, ctx);
+        const info =
+          `원본: ${maskTitle(path.basename(f), ctx)} · ` +
+          `처리일: ${new Date().toLocaleDateString('ko-KR')}`;
+        const page = htmlPage(mdToHtml(marked), title, info);
+        const pdfFile = path.join(outDir, `${name}_masked.pdf`);
+        const tmpHtml = path.join(
+          os.tmpdir(),
+          `mask_${process.pid}_${Date.now()}.html`,
+        );
+        fs.writeFileSync(tmpHtml, page, 'utf8');
+        let done = false;
+        try {
+          done = browser && printPdf(browser, tmpHtml, pdfFile);
+        } finally {
+          if (done) fs.unlinkSync(tmpHtml);
+        }
+        if (done) console.log(`     -> ${pdfFile}`);
+        else {
+          const htmlFile = path.join(outDir, `${name}_masked.html`);
+          fs.renameSync(tmpHtml, htmlFile);
+          htmlOnly++;
+          console.log(`     -> ${htmlFile} (PDF 대신 HTML)`);
+        }
+      }
       console.log(`     치환: ${c}`);
+      if (ner && aiList.length)
+        console.log(`     AI가 찾은 이름: ${aiList.length}개`);
       const bz = ctx.biz.size ? `, 업체 ${ctx.biz.size}곳` : '';
       console.log(
         `     인물 ${ctx.persons.size}명, ` +
@@ -1040,18 +1602,42 @@ function main() {
         console.log(`     [확인] 남은 긴 숫자열: ${rows}행${more}`);
       }
     } catch (e) {
-      console.log(`  [실패] ${path.basename(f)} - ${e.message}`);
+      const busy = /EBUSY|EPERM/.test(String(e.code));
+      const why = busy
+        ? '결과 파일이 엑셀 등에 열려 있습니다. 닫고 다시 하세요.'
+        : e.message;
+      console.log(`  [실패] ${path.basename(f)} - ${why}`);
     }
   }
   console.log(`\n완료: ${ok}/${files.length}개.`);
-  if (o.map) {
-    console.log('* _mapping.csv 에는 실명이 들어 있습니다.');
-    console.log('  결과 md와 따로 보관하고 외부로 보내지 마세요.');
+  if (htmlOnly) {
+    console.log(
+      '* PDF를 만들 브라우저(Edge·Chrome)를 찾지 못해 HTML로',
+    );
+    console.log(
+      '  저장했습니다. HTML을 열고 Ctrl+P -> PDF로 저장하세요.',
+    );
   }
+  if (keepCase) {
+    console.log(
+      `* ${CASE_FILE} 에 사건 대조표가 누적됩니다(실명 포함).`,
+    );
+    console.log(
+      '  같은 사건 문서는 같은 폴더에 두고 이어서 처리하세요.',
+    );
+  } else if (o.map) {
+    console.log('* _mapping.csv 에는 실명이 들어 있습니다.');
+  }
+  if (o.map)
+    console.log('  결과 md·pdf와 따로 보관하고 외부로 보내지 마세요.');
   console.log('* 결과 파일을 꼭 한 번 훑어보세요.');
   console.log('  놓친 이름은 names.txt, 잘못 가려진 낱말은');
   console.log('  exclude.txt에 적으면 다음부터 반영됩니다.\n');
 }
 
-if (require.main === module) main();
-module.exports = { maskText, newContext, collectNames };
+if (require.main === module)
+  main().catch(e => {
+    console.log(`[오류] ${e.message}`);
+    process.exitCode = 1;
+  });
+module.exports = { maskText, newContext, collectNames, aiNames };
