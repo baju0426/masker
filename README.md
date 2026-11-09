@@ -143,6 +143,10 @@ node masker.js <파일 또는 폴더> [옵션]
 
 HWP·PDF를 Markdown으로 바꾸는 부분은 [kordoc](https://github.com/chrisryugj/kordoc)(MIT 라이선스)을 사용합니다.
 
+## 제작자
+부산광역시 북부소방서에서 근무하고 있습니다. 관련 업무를 하다가 효율성을 높이기 위해 만들어 봤습니다. 초기 모델이라 오류가 있을 수 있습니다. 
+사용해보시고 많은 조언 부탁드립니다. 
+
 ## 라이선스
 
 [MIT](LICENSE)
